@@ -75,6 +75,7 @@ const (
 // important to note that GetBlock can return any block and does not need to be
 // included in the canonical one where as GetBlockByNumber always represents the
 // canonical chain.
+//定义区块链 相关属性
 type BlockChain struct {
 	config *params.ChainConfig // chain & network configuration
 

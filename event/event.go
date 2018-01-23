@@ -26,6 +26,7 @@ import (
 )
 
 // TypeMuxEvent is a time-tagged notification pushed to subscribers.
+//时间机制触发通知推送给订阅者
 type TypeMuxEvent struct {
 	Time time.Time
 	Data interface{}
@@ -38,6 +39,7 @@ type TypeMuxEvent struct {
 // The zero value is ready to use.
 //
 // Deprecated: use Feed
+//订阅注册中心
 type TypeMux struct {
 	mutex   sync.RWMutex
 	subm    map[reflect.Type][]*TypeMuxSubscription
@@ -50,25 +52,34 @@ var ErrMuxClosed = errors.New("event: mux closed")
 // Subscribe creates a subscription for events of the given types. The
 // subscription's channel is closed when it is unsubscribed
 // or the mux is closed.
+//开启订阅，并将此通道放入选择的不同类型通道注册中心
 func (mux *TypeMux) Subscribe(types ...interface{}) *TypeMuxSubscription {
+	//创建订阅通道
 	sub := newsub(mux)
+	//加锁
 	mux.mutex.Lock()
+	//最终执行解锁操作，类似java中finally
 	defer mux.mutex.Unlock()
 	if mux.stopped {
 		// set the status to closed so that calling Unsubscribe after this
 		// call will short circuit.
+		//注册中心不可用，则要关闭此订阅并关闭写通道
 		sub.closed = true
 		close(sub.postC)
 	} else {
+		//当前注册中心中还没有订阅数据，则需要创建订阅信息存储结构
 		if mux.subm == nil {
 			mux.subm = make(map[reflect.Type][]*TypeMuxSubscription)
 		}
+		//将当前订阅放入不同类型的订阅数据中心
 		for _, t := range types {
+			//获取当前类型订阅数据
 			rtyp := reflect.TypeOf(t)
 			oldsubs := mux.subm[rtyp]
 			if find(oldsubs, sub) != -1 {
 				panic(fmt.Sprintf("event: duplicate type %s in Subscribe", rtyp))
 			}
+			//将当前订阅信息添加到此类型订阅数据中心
 			subs := make([]*TypeMuxSubscription, len(oldsubs)+1)
 			copy(subs, oldsubs)
 			subs[len(oldsubs)] = sub
@@ -80,19 +91,26 @@ func (mux *TypeMux) Subscribe(types ...interface{}) *TypeMuxSubscription {
 
 // Post sends an event to all receivers registered for the given type.
 // It returns ErrMuxClosed if the mux has been stopped.
+//推送订阅信息给所有此类型消息的接受者
 func (mux *TypeMux) Post(ev interface{}) error {
+	//创建消息事件
 	event := &TypeMuxEvent{
 		Time: time.Now(),
 		Data: ev,
 	}
+	//获取类型
 	rtyp := reflect.TypeOf(ev)
+	//加锁
 	mux.mutex.RLock()
 	if mux.stopped {
 		mux.mutex.RUnlock()
 		return ErrMuxClosed
 	}
+	//读取订阅通道数据
 	subs := mux.subm[rtyp]
+	//解锁
 	mux.mutex.RUnlock()
+	//将消息事件推送给消息订阅者
 	for _, sub := range subs {
 		sub.deliver(event)
 	}
@@ -102,6 +120,7 @@ func (mux *TypeMux) Post(ev interface{}) error {
 // Stop closes a mux. The mux can no longer be used.
 // Future Post calls will fail with ErrMuxClosed.
 // Stop blocks until all current deliveries have finished.
+//关闭注册中心
 func (mux *TypeMux) Stop() {
 	mux.mutex.Lock()
 	for _, subs := range mux.subm {
@@ -114,6 +133,7 @@ func (mux *TypeMux) Stop() {
 	mux.mutex.Unlock()
 }
 
+//从注册中心中删除订阅信息（各类型）
 func (mux *TypeMux) del(s *TypeMuxSubscription) {
 	mux.mutex.Lock()
 	for typ, subs := range mux.subm {
@@ -145,6 +165,7 @@ func posdelete(slice []*TypeMuxSubscription, pos int) []*TypeMuxSubscription {
 }
 
 // TypeMuxSubscription is a subscription established through TypeMux.
+//订阅信息存储模型
 type TypeMuxSubscription struct {
 	mux     *TypeMux
 	created time.Time
@@ -155,11 +176,15 @@ type TypeMuxSubscription struct {
 	// these two are the same channel. they are stored separately so
 	// postC can be set to nil without affecting the return value of
 	// Chan.
+	//读写锁
 	postMu sync.RWMutex
-	readC  <-chan *TypeMuxEvent
-	postC  chan<- *TypeMuxEvent
+	//只读通道
+	readC <-chan *TypeMuxEvent
+	//写通道
+	postC chan<- *TypeMuxEvent
 }
 
+//创建订阅信息
 func newsub(mux *TypeMux) *TypeMuxSubscription {
 	c := make(chan *TypeMuxEvent)
 	return &TypeMuxSubscription{
@@ -181,6 +206,7 @@ func (s *TypeMuxSubscription) Unsubscribe() {
 }
 
 func (s *TypeMuxSubscription) closewait() {
+	//关闭此订阅信息
 	s.closeMu.Lock()
 	defer s.closeMu.Unlock()
 	if s.closed {
@@ -189,6 +215,7 @@ func (s *TypeMuxSubscription) closewait() {
 	close(s.closing)
 	s.closed = true
 
+	//关闭此订阅信息的写通道
 	s.postMu.Lock()
 	close(s.postC)
 	s.postC = nil
@@ -197,13 +224,17 @@ func (s *TypeMuxSubscription) closewait() {
 
 func (s *TypeMuxSubscription) deliver(event *TypeMuxEvent) {
 	// Short circuit delivery if stale event
+	//通道创建在消息创建之前，无效
 	if s.created.After(event.Time) {
 		return
 	}
 	// Otherwise deliver the event
+	//锁定此订阅通道
 	s.postMu.RLock()
+	//方法执行完，最终解锁
 	defer s.postMu.RUnlock()
 
+	//监听通道io操作，将消息放入写通道，如果写通道已满，则将此订阅通道置为待关闭状态
 	select {
 	case s.postC <- event:
 	case <-s.closing:
